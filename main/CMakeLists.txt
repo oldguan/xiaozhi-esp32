@@ -376,12 +376,6 @@ elseif(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_4_3C)
     set(BUILTIN_TEXT_FONT font_puhui_basic_30_4)
     set(BUILTIN_ICON_FONT font_awesome_30_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_64)
-elseif(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_7C)
-    set(MANUFACTURER "waveshare")
-    set(BOARD_TYPE "esp32-s3-touch-lcd-7c")
-    set(BUILTIN_TEXT_FONT font_puhui_basic_30_4)
-    set(BUILTIN_ICON_FONT font_awesome_30_4)
-    set(DEFAULT_EMOJI_COLLECTION twemoji_64)
 elseif(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_AMOLED_1_75)
     set(MANUFACTURER "waveshare")
     set(BOARD_TYPE "esp32-s3-touch-amoled-1.75")
@@ -870,6 +864,11 @@ elseif(CONFIG_BOARD_TYPE_AI_VOX3)
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
     set(BUILTIN_ICON_FONT font_awesome_20_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_64)
+elseif(CONFIG_BOARD_TYPE_MY_C3_ST7565)
+    set(BOARD_TYPE "my-c3-st7565")
+    set(BUILTIN_TEXT_FONT font_puhui_basic_14_1)
+    set(BUILTIN_ICON_FONT font_awesome_14_1)
+    set(DEFAULT_EMOJI_COLLECTION twemoji_32)
 endif()
 
 if(MANUFACTURER)
@@ -1073,6 +1072,8 @@ idf_component_register(SRCS ${SOURCES}
                         efuse
                         bt
                         fatfs
+                        u8g2
+                        u8g2_hal
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
