@@ -3,7 +3,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
-static const char *TAG = "ST7565R_HW";
+static const char *TAG = "ST7565_HW";
 
 St7565r::St7565r(spi_host_device_t spi_host, gpio_num_t cs, gpio_num_t dc, gpio_num_t rst, gpio_num_t bl)
     : dc_pin_(dc), rst_pin_(rst), bl_pin_(bl) {
@@ -19,7 +19,7 @@ St7565r::St7565r(spi_host_device_t spi_host, gpio_num_t cs, gpio_num_t dc, gpio_
     gpio_config(&io_conf);
 
     spi_device_interface_config_t devcfg = {};
-    devcfg.clock_speed_hz = 10 * 1000 * 1000;
+    devcfg.clock_speed_hz = 4 * 1000 * 1000; // 稳定降频到 4MHz
     devcfg.mode = 0;
     devcfg.spics_io_num = cs;
     devcfg.queue_size = 7;
@@ -56,28 +56,38 @@ void St7565r::Reset() {
 }
 
 void St7565r::Initialize() {
-    ESP_LOGI(TAG, "Init ST7565R Hardware");
+    ESP_LOGI(TAG, "Init ST7565 Hardware");
     Reset();
 
-    SendCommand(0xE2); // Reset
-    vTaskDelay(pdMS_TO_TICKS(10));
+    SendCommand(0xE2); // Soft Reset
+    vTaskDelay(pdMS_TO_TICKS(50));
 
-    SendCommand(0xA2); // 1/9 Bias
-    SendCommand(0xA0); // ADC Normal
-    SendCommand(0xC8); // COM Reverse
+    SendCommand(0xA3); // 1/7 Bias (增强驱动电压)
+    SendCommand(0xA0); // ADC Normal (如果左右反了改为 0xA1)
+    SendCommand(0xC8); // COM Reverse (如果上下反了改为 0xC0)
+    SendCommand(0xA6); // Normal Display
     SendCommand(0x40); // Start line 0
 
-    SendCommand(0x28 | 0x07); // Power control
-    vTaskDelay(pdMS_TO_TICKS(50));
+    // 分步开启电源 (防花屏)
+    SendCommand(0x2C); 
+    vTaskDelay(pdMS_TO_TICKS(5));
+    SendCommand(0x2E); 
+    vTaskDelay(pdMS_TO_TICKS(5));
+    SendCommand(0x2F); 
+    vTaskDelay(pdMS_TO_TICKS(5));
     
-    SendCommand(0x20 | 0x05); // Resistor ratio
-    SendCommand(0x81); // Volume
-    SendCommand(0x18); // Contrast
+    // 提升对比度
+    SendCommand(0x20 | 0x06); // 粗调
+    SendCommand(0x81);        
+    SendCommand(0x30);        // 微调 (如果太黑，调小为 0x28；如果太淡，调大为 0x35)
     
     SendCommand(0xA4); // All points normal
-    SendCommand(0xA6); // Display normal
-    SendCommand(0xAF); // Display ON
 
+    // 开机先清空随机内存
+    Clear(0); 
+    Flush();  
+
+    SendCommand(0xAF); // Display ON
     SetBacklight(true);
 }
 
@@ -108,8 +118,8 @@ void St7565r::Clear(uint8_t color) {
 void St7565r::Flush() {
     for (int page = 0; page < 8; page++) {
         SendCommand(0xB0 | page);
-        SendCommand(0x00); // Lower column
-        SendCommand(0x10); // Upper column
+        SendCommand(0x00); // 列地址低 4 位 (如果画面最左侧有雪花边，改成 0x04)
+        SendCommand(0x10); // 列地址高 4 位
         SendData(&buffer_[page * 128], 128);
     }
 }

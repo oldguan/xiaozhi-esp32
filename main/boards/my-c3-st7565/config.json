@@ -7,7 +7,10 @@
                 "CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y",
                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/my_c3_4m.csv\"",
                 "CONFIG_USE_DEVICE_AEC=y",
-                "CONFIG_WAKE_WORD_DISABLED=n"
+                "CONFIG_PM_ENABLE=y",
+                "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y",
+                "CONFIG_USE_ESP_WAKE_WORD=y",
+                "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y"
             ]
         }
     ]
