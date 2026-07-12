@@ -1,47 +1,147 @@
+#include <time.h>
 #include "audio_codec.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
 #include "display.h"
-#include "display/st7565r.h"
-#include "display/st7565r_display.h"
+#include "esp_wifi.h"
 #include "wifi_board.h"
 
-// 引入你拉取到 components 里的 U8g2 库
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
-// 修改后：
+
 extern "C" {
-#include <u8g2.h>
+#include "u8g2.h"
 #include "u8g2_esp32_hal.h"
 }
-
 // --------------------------------------------------------
 // 1. 定义你的 ST7565 单色屏驱动类，继承小智的 Display 接口
 // --------------------------------------------------------
 class Mini12864Display : public Display {
 private:
     u8g2_t u8g2;
-    char current_msg[64] = "Xiaozhi Starting...";  // 缓存当前系统要显示的文本
+    char current_msg[512] = "Xiaozhi Ready!";  // 【修改1】扩容到 512 字节，支持多行长文本
+    SemaphoreHandle_t mutex;
 
-    // 屏幕刷新任务（跑在后台，替代 Arduino 的 loop）
+    // 【修改2】升级版辅助函数：计算下一行的字节长度
+    // 既能检测 \n 主动换行，又能在达到显示宽度上限 (max_bytes) 时自动折行，且绝不拆散 UTF-8 汉字！
+    static int get_next_line_len(const char* str, int max_bytes) {
+        int len = 0;
+        // 遇到字符串结束符 \0、换行符 \n 或 \r 时立即停止，实现主动换行
+        while (len < max_bytes && str[len] != '\0' && str[len] != '\n' && str[len] != '\r') {
+            len++;
+        }
+        // 如果是因为达到了 max_bytes 宽度上限而停止，需向后倒退到 UTF-8 字符首字节，防止割裂汉字
+        if (len == max_bytes && str[len] != '\0' && str[len] != '\n' && str[len] != '\r') {
+            while (len > 0 && (str[len] & 0xC0) == 0x80) {
+                len--;
+            }
+        }
+        return len;
+    }
+
+    // 屏幕实时刷新任务 (防花屏 & 支持 \n 换行安全版)
     static void display_task(void* pvParameter) {
         Mini12864Display* display = (Mini12864Display*)pvParameter;
+
+        int rssi = -100;
+        int wifi_check_counter = 0;
+
         while (1) {
-            u8g2_ClearBuffer(&display->u8g2);
-            u8g2_SetFont(&display->u8g2, u8g2_font_ncenB08_tr);
+            if (xSemaphoreTake(display->mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                u8g2_ClearBuffer(&display->u8g2);
 
-            // 简单画个界面，将缓存的文字刷到屏幕上
-            u8g2_DrawStr(&display->u8g2, 0, 20, display->current_msg);
+                // ==========================================
+                // 1. 顶部状态栏 (Y: 0 ~ 14)
+                // ==========================================
+                u8g2_SetFont(&display->u8g2, u8g2_font_wqy12_t_gb2312);
+                u8g2_DrawStr(&display->u8g2, 2, 10, "Xiaozhi");
 
-            u8g2_SendBuffer(&display->u8g2);
-            vTaskDelay(pdMS_TO_TICKS(100));  // 100ms刷新一次
+                // --- 实时时间 ---
+                time_t now;
+                struct tm timeinfo;
+                time(&now);
+                localtime_r(&now, &timeinfo);
+                char time_str[16];
+                if (timeinfo.tm_year < (2023 - 1900)) {
+                    snprintf(time_str, sizeof(time_str), "--:--");
+                } else {
+                    snprintf(time_str, sizeof(time_str), "%02d:%02d", timeinfo.tm_hour,
+                             timeinfo.tm_min);
+                }
+                u8g2_DrawStr(&display->u8g2, 86, 10, time_str);
+
+                // --- 4格 Wi-Fi 信号柱 ---
+                if (wifi_check_counter++ % 30 == 0) {
+                    wifi_ap_record_t ap_info;
+                    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+                        rssi = ap_info.rssi;
+                    } else {
+                        rssi = -100;
+                    }
+                }
+
+                int bars = 0;
+                if (rssi > -60)
+                    bars = 4;
+                else if (rssi > -70)
+                    bars = 3;
+                else if (rssi > -80)
+                    bars = 2;
+                else if (rssi > -90)
+                    bars = 1;
+
+                for (int i = 0; i < 4; i++) {
+                    int bar_h = 2 + i * 2;
+                    int bar_x = 114 + i * 3;
+                    int bar_y = 11 - bar_h;
+                    if (i < bars) {
+                        u8g2_DrawBox(&display->u8g2, bar_x, bar_y, 2, bar_h);
+                    } else {
+                        u8g2_DrawFrame(&display->u8g2, bar_x, bar_y, 2, bar_h);
+                    }
+                }
+
+                u8g2_DrawHLine(&display->u8g2, 0, 14, 128);
+
+                // ==========================================
+                // 2. 底部对话交互区 (支持 \n 主动换行 + 达到宽度自动折行)
+                // ==========================================
+                u8g2_SetFont(&display->u8g2, u8g2_font_wqy12_t_gb2312);
+                char* ptr = display->current_msg;
+                int y = 28;         // 第一行的基线 Y 坐标
+                int max_lines = 3;  // 128x64 屏幕扣除状态栏后，底部最多展示 3 行文字
+
+                // 【修改3】重构为循环绘制，自动适配 \n 换行和长文本折行
+                for (int i = 0; i < max_lines && *ptr != '\0'; i++) {
+                    // 每行最多容纳 30 个 UTF-8 字节 (10个中文汉字或30个英文字母)
+                    int len = get_next_line_len(ptr, 30);
+                    if (len > 0) {
+                        char line_buf[36] = {0};
+                        strncpy(line_buf, ptr, len);
+                        u8g2_DrawUTF8(&display->u8g2, 0, y, line_buf);
+                    }
+                    y += 14;     // 下移一行 (行高 14px)
+                    ptr += len;  // 指针移动到当前行末尾
+
+                    // 跳过末尾所有的换行符 \r 和 \n，让下一行文字从干净的字符开始
+                    while (*ptr == '\r' || *ptr == '\n') {
+                        ptr++;
+                    }
+                }
+
+                u8g2_SendBuffer(&display->u8g2);
+                xSemaphoreGive(display->mutex);
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));  // 维持稳健的 10FPS 刷新率
         }
     }
 
 public:
     Mini12864Display() {
-        // === U8g2 硬件 SPI 初始化 ===
+        mutex = xSemaphoreCreateMutex();
+
         u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
         u8g2_esp32_hal.clk = DISPLAY_SCLK_PIN;
         u8g2_esp32_hal.mosi = DISPLAY_MOSI_PIN;
@@ -50,76 +150,50 @@ public:
         u8g2_esp32_hal.reset = DISPLAY_RST_PIN;
         u8g2_esp32_hal_init(u8g2_esp32_hal);
 
-        // 绑定 ST7565 驱动
-        u8g2_Setup_st7565_ea_dogm128_f(&u8g2, U8G2_R0, u8g2_esp32_spi_byte_cb,
-                                       u8g2_esp32_gpio_and_delay_cb);
+        u8g2_Setup_st7565_jlx12864_f(     //
+            &u8g2,                        //
+            U8G2_R0,                      //
+            u8g2_esp32_spi_byte_cb,       // 硬件 SPI 数据传输回调
+            u8g2_esp32_gpio_and_delay_cb  // 硬件延时与 GPIO 控制回调
+        );
 
         u8g2_InitDisplay(&u8g2);
         u8g2_SetPowerSave(&u8g2, 0);
-        u8g2_SetContrast(&u8g2, 10);
+        u8g2_SetContrast(&u8g2, 66);
 
-        // 启动后台刷新任务
         xTaskCreate(display_task, "lcd_task", 4096, this, 2, NULL);
     }
 
-    // === 重写小智系统调用的虚函数，把内容映射到单色屏上 ===
+    ~Mini12864Display() {
+        if (mutex)
+            vSemaphoreDelete(mutex);
+    }
 
     virtual void SetChatMessage(const char* role, const char* content) override {
-        // 小智在说话时系统会调用这个函数
-        // 我们把内容截取并存下来，后台 task 会自动把它刷到屏幕上
-        snprintf(current_msg, sizeof(current_msg), "%s: %s", role, content);
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            // 【修改4】在 role 后添加
+            // \n，这样角色名（如“小智:”）会占第一行，AI的回复内容会自动从第二行开始显示
+            snprintf(current_msg, sizeof(current_msg), "%s:\n%s", role, content);
+            xSemaphoreGive(mutex);
+        }
     }
 
     virtual bool Lock(int timeout_ms = 0) override {
-        // 单色屏刷新很快，我们直接返回 true 假装上锁成功
-        return true;
+        return xSemaphoreTake(mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
     }
 
-    virtual void Unlock() override {
-        // 留空即可
-    }
+    virtual void Unlock() override { xSemaphoreGive(mutex); }
 };
 
 // --------------------------------------------------------
-// 定义开发板类，继承 WifiBoard ST7565
+// 定义开发板类，继承 WifiBoard
 // --------------------------------------------------------
 class MyC3Board : public WifiBoard {
 private:
     Display* display_;
 
 public:
-    MyC3Board() {
-        // InitializeSpi();
-        // InitializeDisplay();
-        display_ = new Mini12864Display();
-    }
-
-    // SPI初始化（用于显示屏）
-    void InitializeSpi() {
-        spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
-        buscfg.miso_io_num = GPIO_NUM_NC;
-        buscfg.sclk_io_num = DISPLAY_SCLK_PIN;
-        buscfg.quadwp_io_num = GPIO_NUM_NC;
-        buscfg.quadhd_io_num = GPIO_NUM_NC;
-        buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
-        ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    }
-
-    // 显示屏初始化 ST7565
-    void InitializeDisplay() {
-        // 实例化物理驱动
-        St7565r* hw_lcd = new St7565r(SPI2_HOST,        //
-                                      DISPLAY_CS_PIN,   // CS 屏幕侧
-                                      DISPLAY_DC_PIN,   // A0 / DC
-                                      DISPLAY_RST_PIN,  // RST
-                                      GPIO_NUM_NC       // BL
-        );
-        hw_lcd->Initialize();
-
-        // 实例化 LVGL 适配层 (屏幕分辨率 128x64)
-        display_ = new St7565rDisplay(hw_lcd, 128, 64);
-    }
+    MyC3Board() { display_ = new Mini12864Display(); }
 
     // 核心：系统要找屏幕，我们就把自己的单色屏交出去
     virtual Display* GetDisplay() override { return display_; }

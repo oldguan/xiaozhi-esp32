@@ -26,8 +26,6 @@ set(SOURCES "audio/audio_codec.cc"
             "display/lvgl_display/gif/gifdec.c"
             "display/lvgl_display/jpg/image_to_jpeg.cpp"
             "display/lvgl_display/jpg/jpeg_to_image.c"
-            "display/st7565r.cc"
-            "display/st7565r_display.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
@@ -1074,8 +1072,7 @@ idf_component_register(SRCS ${SOURCES}
                         efuse
                         bt
                         fatfs
-                        #u8g2
-                        #u8g2_hal
+                        u8g2
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 

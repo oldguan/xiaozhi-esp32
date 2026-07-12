@@ -148,4 +148,7 @@ dependencies:
     version: '>=5.5.2'
   m5stack/m5ioe1: ^1.0.8
   m5stack/m5pm1: ^1.0.5
-  nixy4/u8g2: ^0.1.4
+  # 自定义依赖名称
+  olikraus/u8g2:
+    git: https://github.com/olikraus/u8g2.git
+    version: "master"

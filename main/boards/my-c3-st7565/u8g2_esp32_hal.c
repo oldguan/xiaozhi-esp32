@@ -59,8 +59,7 @@ uint8_t u8g2_esp32_spi_byte_cb(u8x8_t* u8x8, uint8_t msg, uint8_t arg_int, void*
             bus_config.miso_io_num = -1;                   // MISO
             bus_config.quadwp_io_num = -1;                 // Not used
             bus_config.quadhd_io_num = -1;                 // Not used
-            // ESP_LOGI(TAG, "... Initializing bus.");
-            // ESP_ERROR_CHECK(spi_bus_initialize(HSPI_HOST, &bus_config, 1));
+
             //  修改后（柔性 SPI 初始化方案）：
             esp_err_t spi_err = spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO);
             // 如果初始化失败，并且错误原因不是“总线已被初始化过(INVALID_STATE)”，才触发报错
@@ -84,8 +83,6 @@ uint8_t u8g2_esp32_spi_byte_cb(u8x8_t* u8x8, uint8_t msg, uint8_t arg_int, void*
             dev_config.pre_cb = NULL;
             dev_config.post_cb = NULL;
             // ESP_LOGI(TAG, "... Adding device bus.");
-            // ESP_ERROR_CHECK(spi_bus_add_device(HSPI_HOST, &dev_config, &handle_spi));
-            //  修改后：
             ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_config, &handle_spi));
 
             break;
